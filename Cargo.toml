@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 # Web framework
-axum = { version = "0.7.2", features = ["headers", "multipart"] }
+axum = { version = "0.6.2", features = ["headers", "multipart"] }
 tower = "0.4.13"
 tower-http = { version = "0.5.0", features = ["trace", "cors", "compression-gzip"] }
 tokio = { version = "1.32.0", features = ["full"] }

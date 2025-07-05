@@ -66,3 +66,4 @@ jsonwebtoken = "8.3.0"
 
 # Password hashing
 argon2 = "0.5.2"
+lazy_static = "1.5.0"

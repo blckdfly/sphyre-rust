@@ -4,7 +4,7 @@ use crate::services::identity::validate_auth_token;
 use axum::{
     body::Body,
     extract::State,
-    http::{Request, StatusCode},
+    http::{Request},
     middleware::Next,
     response::Response,
 };
@@ -14,9 +14,8 @@ use std::sync::Arc;
 pub async fn authenticate(
     State(state): State<Arc<AppState>>,
     mut request: Request<Body>,
-    next: Next,
+    next: Next<Body>,
 ) -> Result<Response, ApiError> {
-    // Extract token from Authorization header
     let token = extract_token_from_header(&request)
         .ok_or_else(|| ApiError::AuthError("Missing or invalid authorization header".to_string()))?;
 
@@ -34,18 +33,16 @@ pub async fn authenticate(
 
 // Admin authorization middleware (additional layer after authentication)
 pub async fn authorize_admin(
-    State(state): State<Arc<AppState>>,
-    mut request: Request<Body>,
-    next: Next,
+    State(..): State<Arc<AppState>>,
+    request: Request<Body>,
+    next: Next<Body>,
 ) -> Result<Response, ApiError> {
-    // Authentication should already have happened and user stored in extensions
     let user = request
         .extensions()
         .get::<User>()
         .cloned()
         .ok_or_else(|| ApiError::AuthError("User not authenticated".to_string()))?;
 
-    // Check if user is an admin
     if !user.is_admin {
         return Err(ApiError::AccessDenied("Admin access required".to_string()));
     }

@@ -1,15 +1,16 @@
 mod api;
 mod blockchain;
 mod config;
-mod constants;
-mod db;
+pub mod db;
 mod models;
 mod services;
 mod utils;
+mod routes;
+mod constant;
 
 use crate::api::routes::create_routes;
-use crate::config::settings::Settings;
-use crate::db::mongodb::connect_database;
+
+use crate::db::mongodb::init_database as connect_database;
 use axum::Server;
 use std::net::SocketAddr;
 use std::sync::Arc;

@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    http::{Request, StatusCode},
+    http::{Request},
     middleware::Next,
     response::Response,
 };
@@ -9,12 +9,11 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 // Request logging middleware
-pub async fn log_request(request: Request<Body>, next: Next) -> Response {
+pub async fn log_request(request: Request<Body>, next: Next<Body>) -> Response {
     let start_time = Utc::now();
     let request_id = Uuid::new_v4().to_string();
     let method = request.method().clone();
     let uri = request.uri().clone();
-    let version = request.version();
 
     // Add request ID to extensions for potential use in handlers
     let mut request = request;

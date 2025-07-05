@@ -173,7 +173,7 @@ impl<'a> StorageService<'a> {
             .find_one(doc! { "id": file_id }, None)
             .await?;
 
-        let storage_item = match result {
+        let storage_item: StorageItem = match result {
             Some(doc) => bson::from_document(doc)?,
             None => {
                 // Log failed access attempt

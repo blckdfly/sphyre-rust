@@ -3,6 +3,7 @@ use crate::models::consent::{Consent, ConsentStatus};
 use crate::models::user::User;
 use anyhow::{Context, Result};
 use chrono::Utc;
+use futures::TryStreamExt;
 use mongodb::{
     bson::{doc, to_document},
     Client as MongoClient, Collection,
@@ -98,7 +99,7 @@ impl<'a> AccessControlService<'a> {
     }
 
     // Check if user is the owner of a resource
-    async fn is_owner(&self, user_id: &str, resource_id: &str, resource_type: &ResourceType) -> Result<bool> {
+    pub(crate) async fn is_owner(&self, user_id: &str, resource_id: &str, resource_type: &ResourceType) -> Result<bool> {
         match resource_type {
             ResourceType::DID => {
                 let users_collection = self.get_users_collection();

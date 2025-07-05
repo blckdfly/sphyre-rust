@@ -1,14 +1,11 @@
 // Constants for SSI Wallet Application
 
-// JWT related constants
 pub const JWT_SECRET: &str = "your_jwt_secret_key_here"; // Change in production
 pub const JWT_EXPIRATION: i64 = 24 * 60 * 60; // 24 hours in seconds
 
-// IPFS related constants
 pub const IPFS_API_URL: &str = "http://127.0.0.1:5001/api/v0";
 pub const IPFS_GATEWAY_URL: &str = "http://127.0.0.1:8080/ipfs";
 
-// Blockchain related constants
 pub const DEFAULT_GAS_LIMIT: u64 = 6721975;
 pub const DEFAULT_GAS_PRICE: u64 = 20000000000;
 pub const CHAIN_ID: u64 = 1; // Ethereum mainnet; use appropriate value for your blockchain

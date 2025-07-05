@@ -45,6 +45,7 @@ pub enum AccessAction {
     Verify,
     #[serde(rename = "login")]
     Login,
+    Revoke,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

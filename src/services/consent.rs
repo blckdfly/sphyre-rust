@@ -166,6 +166,7 @@ impl<'a> ConsentService<'a> {
 
     // Get consents for a user
     pub async fn get_user_consents(&self, user_id: &str) -> Result<Vec<Consent>> {
+        use futures::TryStreamExt;
         let consents_collection = self.db.database("ssi_db").collection("consents");
 
         let cursor = consents_collection
@@ -182,6 +183,7 @@ impl<'a> ConsentService<'a> {
 
     // Get consents requested by a requester
     pub async fn get_requester_consents(&self, requester_id: &str) -> Result<Vec<Consent>> {
+        use futures::TryStreamExt;
         let consents_collection = self.db.database("ssi_db").collection("consents");
 
         let cursor = consents_collection

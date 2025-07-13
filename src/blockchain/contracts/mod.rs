@@ -1,3 +1,3 @@
-mod identity;
-mod credential;
-mod access_control;
+pub mod identity;
+pub mod credential;
+pub mod access_control;

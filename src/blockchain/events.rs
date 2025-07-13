@@ -1,11 +1,11 @@
 use crate::blockchain::ethereum::BlockchainService;
 use crate::models::smart_contract::ContractEvent;
-use anyhow::{Context, Result};
-use ethers::prelude::StreamExt;
+use anyhow::{Result};
+use ethers::types::{Filter, Log, BlockNumber, H160, H256, U64};
+use ethers::providers::{Middleware, StreamExt};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task;
-use web3::types::{BlockNumber, FilterBuilder, Log};
 
 // Event listener for blockchain events
 pub struct EventListener {
@@ -41,122 +41,128 @@ impl EventListener {
         blockchain: Arc<BlockchainService>,
         sender: mpsc::Sender<ContractEvent>,
     ) -> Result<()> {
-        // Get web3 instance
-        let web3 = &blockchain.web3;
+        // Get provider from blockchain service
+        let provider = blockchain.get_provider();
 
-        // Create filter for contract events
-        // This is a simplified example that would need adjustment for real events
-        let filter = FilterBuilder::default()
+        // Parse contract addresses
+        let mut addresses = Vec::new();
+        
+        // Add identity contract address if available
+        if let Ok(addr_str) = std::env::var("IDENTITY_CONTRACT_ADDRESS") {
+            if let Ok(addr) = addr_str.parse::<H160>() {
+                addresses.push(addr);
+            }
+        }
+
+        if let Ok(addr_str) = std::env::var("CREDENTIAL_CONTRACT_ADDRESS") {
+            if let Ok(addr) = addr_str.parse::<H160>() {
+                addresses.push(addr);
+            }
+        }
+
+        if let Ok(addr_str) = std::env::var("ACCESS_CONTROL_CONTRACT_ADDRESS") {
+            if let Ok(addr) = addr_str.parse::<H160>() {
+                addresses.push(addr);
+            }
+        }
+
+        let filter = Filter::new()
             .from_block(BlockNumber::Latest)
-            .address(vec![
-                // Add contract addresses to listen for
-                blockchain.identity_contract_address.unwrap_or_default(),
-                blockchain.credential_contract_address.unwrap_or_default(),
-                blockchain.access_control_contract_address.unwrap_or_default(),
-            ])
-            .build();
+            .address(addresses);
 
-        // Create filter
-        let filter_id = web3.eth().filter(filter).await?;
+        // Create a stream of logs
+        let mut stream = provider.watch(&filter).await?;
 
         // Listen for new logs
-        loop {
-            // Get new logs since last poll
-            let logs = web3.eth().get_filter_changes(filter_id.clone()).await?;
-
-            for log in logs {
-                // Process each log
-                if let Some(event) = process_log(log).await? {
-                    // Send event to event channel
-                    if sender.send(event).await.is_err() {
-                        eprintln!("Failed to send event, channel might be closed");
-                        break;
-                    }
+        while let Some(log) = stream.next().await {
+            // Process each log
+            if let Some(event) = process_log(log).await? {
+                if sender.send(event).await.is_err() {
+                    eprintln!("Failed to send event, channel might be closed");
+                    break;
                 }
             }
-
-            // Wait before next poll
-            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
         }
+
+        Ok(())
     }
 }
 
 // Process a log entry from the blockchain
 async fn process_log(log: Log) -> Result<Option<ContractEvent>> {
-    // This would need to be implemented based on your contract's event structure
-    // Here we're providing a simplified implementation
-
     // Extract topics
     let topics = log.topics;
     if topics.is_empty() {
         return Ok(None);
     }
-
-    // First topic is the event signature
+    
     let event_sig = topics[0];
 
-    // Simplified event matching based on signature
-    // In real implementation, you would decode the log data based on ABI
-    let event = match event_sig.as_bytes() {
-        // Match DID created event
-        b if b.starts_with(b"DIDCreated") => {
-            let did = String::from_utf8_lossy(&log.data.0).to_string();
+    // Define event signatures (these should match your contract's event signatures)
+    // In a real implementation, you would use the ABI to decode events properly
+    let did_created_sig = H256::from_slice(&keccak256(b"DIDCreated(string,address,uint256)"));
+    let credential_issued_sig = H256::from_slice(&keccak256(b"CredentialIssued(bytes32,address,address,uint256)"));
+    let credential_revoked_sig = H256::from_slice(&keccak256(b"CredentialRevoked(bytes32,uint256)"));
+    let access_policy_created_sig = H256::from_slice(&keccak256(b"AccessPolicyCreated(bytes32,bytes32,uint256)"));
+    let access_policy_revoked_sig = H256::from_slice(&keccak256(b"AccessPolicyRevoked(bytes32,uint256)"));
+    let consent_given_sig = H256::from_slice(&keccak256(b"ConsentGiven(bytes32,address,address,uint256)"));
+    let consent_revoked_sig = H256::from_slice(&keccak256(b"ConsentRevoked(bytes32,uint256)"));
+
+    // Match events based on signature
+    let event = match event_sig {
+        sig if sig == did_created_sig => {
+            // Extract DID from log data (this is a simplified example)
+            let did = format!("did:eth:{:x}", log.address);
             ContractEvent::DIDCreated {
                 did,
-                block_number: log.block_number.unwrap_or_default().as_u64()
+                block_number: log.block_number.unwrap_or(U64::zero()).as_u64(),
             }
         }
 
-        // Match Credential issued event
-        b if b.starts_with(b"CredentialIssued") => {
+        sig if sig == credential_issued_sig => {
             ContractEvent::CredentialIssued {
-                credential_id: format!("0x{:x}", topics[1]),
-                issuer: format!("0x{:x}", topics[2]),
-                subject: format!("0x{:x}", topics[3]),
-                block_number: log.block_number.unwrap_or_default().as_u64()
+                credential_id: format!("{:x}", topics.get(1).unwrap_or(&H256::zero())),
+                issuer: format!("{:x}", topics.get(2).unwrap_or(&H256::zero())),
+                subject: format!("{:x}", topics.get(3).unwrap_or(&H256::zero())),
+                block_number: log.block_number.unwrap_or(U64::zero()).as_u64(),
             }
         }
 
-        // Match Credential revoked event
-        b if b.starts_with(b"CredentialRevoked") => {
+        sig if sig == credential_revoked_sig => {
             ContractEvent::CredentialRevoked {
-                credential_id: format!("0x{:x}", topics[1]),
-                block_number: log.block_number.unwrap_or_default().as_u64()
+                credential_id: format!("{:x}", topics.get(1).unwrap_or(&H256::zero())),
+                block_number: log.block_number.unwrap_or(U64::zero()).as_u64(),
             }
         }
 
-        // Match AccessPolicy created event
-        b if b.starts_with(b"AccessPolicyCreated") => {
+        sig if sig == access_policy_created_sig => {
             ContractEvent::AccessPolicyCreated {
-                policy_id: format!("0x{:x}", topics[1]),
-                resource_id: format!("0x{:x}", topics[2]),
-                block_number: log.block_number.unwrap_or_default().as_u64()
+                policy_id: format!("{:x}", topics.get(1).unwrap_or(&H256::zero())),
+                resource_id: format!("{:x}", topics.get(2).unwrap_or(&H256::zero())),
+                block_number: log.block_number.unwrap_or(U64::zero()).as_u64(),
             }
         }
 
-        // Match AccessPolicy revoked event
-        b if b.starts_with(b"AccessPolicyRevoked") => {
+        sig if sig == access_policy_revoked_sig => {
             ContractEvent::AccessPolicyRevoked {
-                policy_id: format!("0x{:x}", topics[1]),
-                block_number: log.block_number.unwrap_or_default().as_u64()
+                policy_id: format!("{:x}", topics.get(1).unwrap_or(&H256::zero())),
+                block_number: log.block_number.unwrap_or(U64::zero()).as_u64(),
             }
         }
 
-        // Match Consent given event
-        b if b.starts_with(b"ConsentGiven") => {
+        sig if sig == consent_given_sig => {
             ContractEvent::ConsentGiven {
-                consent_id: format!("0x{:x}", topics[1]),
-                user: format!("0x{:x}", topics[2]),
-                controller: format!("0x{:x}", topics[3]),
-                block_number: log.block_number.unwrap_or_default().as_u64()
+                consent_id: format!("{:x}", topics.get(1).unwrap_or(&H256::zero())),
+                user: format!("{:x}", topics.get(2).unwrap_or(&H256::zero())),
+                controller: format!("{:x}", topics.get(3).unwrap_or(&H256::zero())),
+                block_number: log.block_number.unwrap_or(U64::zero()).as_u64(),
             }
         }
 
-        // Match Consent revoked event
-        b if b.starts_with(b"ConsentRevoked") => {
+        sig if sig == consent_revoked_sig => {
             ContractEvent::ConsentRevoked {
-                consent_id: format!("0x{:x}", topics[1]),
-                block_number: log.block_number.unwrap_or_default().as_u64()
+                consent_id: format!("{:x}", topics.get(1).unwrap_or(&H256::zero())),
+                block_number: log.block_number.unwrap_or(U64::zero()).as_u64(),
             }
         }
 
@@ -169,16 +175,21 @@ async fn process_log(log: Log) -> Result<Option<ContractEvent>> {
     Ok(Some(event))
 }
 
-// Create event listener
 pub async fn create_event_listener(
     blockchain: Arc<BlockchainService>,
 ) -> Result<(mpsc::Receiver<ContractEvent>, task::JoinHandle<()>)> {
-    // Create channel for events
     let (sender, receiver) = mpsc::channel(100);
-
-    // Create and start listener
+    
     let listener = EventListener::new(blockchain, sender);
     let handle = listener.start().await?;
 
     Ok((receiver, handle))
+}
+
+// Helper function to compute keccak256 hash
+fn keccak256(input: &[u8]) -> [u8; 32] {
+    use sha3::{Digest, Keccak256};
+    let mut hasher = Keccak256::new();
+    hasher.update(input);
+    hasher.finalize().into()
 }

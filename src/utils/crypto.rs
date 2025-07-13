@@ -10,18 +10,14 @@ use crate::utils::errors::WalletError;
 
 pub type Result<T> = std::result::Result<T, WalletError>;
 
-/// Generate a random 32 bytes private key
 pub fn generate_private_key() -> Result<[u8; 32]> {
     let mut key = [0u8; 32];
-    OsRng.fill_bytes(&mut key);
+    OsRng::new().fill_bytes(&mut key);
     Ok(key)
 }
 
-/// Derive Ethereum address from public key
 pub fn public_key_to_eth_address(public_key: &PublicKey) -> String {
     let public_key_bytes = public_key.serialize_uncompressed();
-
-    // Remove the first byte (0x04) which indicates uncompressed key
     let public_key_bytes = &public_key_bytes[1..];
 
     // Keccak-256 hash
@@ -29,11 +25,9 @@ pub fn public_key_to_eth_address(public_key: &PublicKey) -> String {
     hasher.update(public_key_bytes);
     let hash = hasher.finalize();
 
-    // Take last 20 bytes of hash to get Ethereum address
     format!("0x{}", hex::encode(&hash[12..32]))
 }
 
-/// Derive public key from private key
 pub fn derive_public_key(private_key: &[u8; 32]) -> Result<PublicKey> {
     let secp = Secp256k1::new();
     let secret_key = SecretKey::from_slice(private_key)
@@ -74,11 +68,10 @@ pub fn verify_password(password: &str, salt: &[u8], hash: &[u8]) -> bool {
 /// Generate random salt
 pub fn generate_salt() -> [u8; PASSWORD_SALT_LEN] {
     let mut salt = [0u8; PASSWORD_SALT_LEN];
-    OsRng.fill_bytes(&mut salt);
+    OsRng::new().fill_bytes(&mut salt);
     salt
 }
 
-/// Encrypt data using AES-GCM with key derived from password
 pub fn encrypt_data(data: &[u8], password: &str) -> Result<Vec<u8>> {
     use aes_gcm::{
         aead::{Aead, KeyInit, Payload},
@@ -88,10 +81,9 @@ pub fn encrypt_data(data: &[u8], password: &str) -> Result<Vec<u8>> {
     // Generate a random salt and nonce
     let salt = generate_salt();
     let mut nonce_bytes = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce_bytes);
+    OsRng::new().fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
 
-    // Derive encryption key from password and salt
     let key = hash_password(password, &salt)?;
     let key = key.as_slice().try_into()
         .map_err(|_| WalletError::EncryptionError("Invalid key length".to_string()))?;
@@ -135,7 +127,6 @@ pub fn decrypt_data(encrypted_data: &[u8], password: &str) -> Result<Vec<u8>> {
 
     let nonce = Nonce::from_slice(nonce_bytes);
 
-    // Derive decryption key from password and salt
     let key = hash_password(password, salt)?;
     let key = key.as_slice().try_into()
         .map_err(|_| WalletError::DecryptionError("Invalid key length".to_string()))?;
@@ -206,7 +197,13 @@ pub fn verify_signature(data: &[u8], signature: &[u8], public_key: &PublicKey) -
 }
 
 /// Calculate SHA-256 hash of data
-pub fn sha256_hash(data: &[u8]) -> Vec<u8> {
+pub fn generate_signature(data: &[u8]) -> Vec<u8> {
+    let hash = digest::digest(&digest::SHA256, data);
+    hash.as_ref().to_vec()
+}
+
+/// Calculate SHA-256 hash of data
+pub fn hash_data(data: &[u8]) -> Vec<u8> {
     let hash = digest::digest(&digest::SHA256, data);
     hash.as_ref().to_vec()
 }

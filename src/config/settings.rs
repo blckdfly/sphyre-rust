@@ -35,7 +35,6 @@ impl Settings {
 
 // Load configuration from environment variables or .env file
 pub fn load_config() -> anyhow::Result<Settings> {
-    // Load from .env file if present
     if Path::new(".env").exists() {
         dotenv::dotenv().ok();
     }

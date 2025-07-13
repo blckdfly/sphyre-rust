@@ -4,13 +4,12 @@ use crate::utils::crypto::{hash_password, verify_password};
 use anyhow::{Context, Result};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{encode, EncodingKey, Header};
-use mongodb::{
-    bson::{doc, to_bson, to_document, Bson, Document},
-    Client as MongoClient, Collection,
-};
+use mongodb::{bson::{doc, to_bson, to_document, Document},  Collection};
 use serde::{Deserialize, Serialize};
 use std::env;
 use uuid::Uuid;
+use crate::db::mongodb::MongoDBClient;
+use crate::models::{NotificationSettings, PrivacySettings, UserPreferences};
 
 // JWT claims structure
 #[derive(Debug, Serialize, Deserialize)]
@@ -21,11 +20,9 @@ struct Claims {
     email: String,     // User email
 }
 
-// Register a new user
-pub async fn register_user(db: &MongoClient, credentials: UserCredentials) -> Result<AuthToken> {
+pub async fn register_user(db: &MongoDBClient, credentials: UserCredentials) -> Result<AuthToken> {
     let users_collection = get_users_collection(db);
 
-    // Check if user already exists
     if users_collection
         .find_one(doc! { "email": &credentials.email }, None)
         .await?
@@ -35,7 +32,8 @@ pub async fn register_user(db: &MongoClient, credentials: UserCredentials) -> Re
     }
 
     // Hash the password
-    let hashed_password = hash_password(&credentials.password)?;
+    let salt = b"default_salt"; // You should use a proper random salt
+    let hashed_password = hash_password(&credentials.password, salt)?;
 
     // Create a new user
     let user_id = Uuid::new_v4().to_string();
@@ -44,12 +42,30 @@ pub async fn register_user(db: &MongoClient, credentials: UserCredentials) -> Re
     let user = User {
         id: user_id.clone(),
         email: credentials.email.clone(),
-        password_hash: hashed_password,
+        password_hash: hex::encode(hashed_password),
         profile: UserProfile {
-            name: credentials.name.unwrap_or_default(),
-            avatar: None,
+            name: credentials.email.clone(),
+            avatar_url: None,
+            bio: None,
+            location: None,
+            website: None,
+            phone: None,
             created_at: now,
             updated_at: now,
+            preferences: UserPreferences {
+                language: "".to_string(),
+                timezone: "".to_string(),
+                notifications: NotificationSettings {
+                    email_notifications: false,
+                    push_notifications: false,
+                    sms_notifications: false,
+                },
+                privacy: PrivacySettings {
+                    profile_visibility: "".to_string(),
+                    allow_data_sharing: false,
+                    track_activity: false,
+                },
+            },
         },
         did: None,
         is_admin: false,
@@ -68,10 +84,9 @@ pub async fn register_user(db: &MongoClient, credentials: UserCredentials) -> Re
 }
 
 // Authenticate user and return token
-pub async fn authenticate_user(db: &MongoClient, credentials: UserCredentials) -> Result<AuthToken> {
+pub async fn authenticate_user(db: &MongoDBClient, credentials: UserCredentials) -> Result<AuthToken> {
     let users_collection = get_users_collection(db);
 
-    // Find user by email
     let user_doc = users_collection
         .find_one(doc! { "email": &credentials.email }, None)
         .await?
@@ -80,7 +95,8 @@ pub async fn authenticate_user(db: &MongoClient, credentials: UserCredentials) -
     let user: User = bson::from_document(user_doc)?;
 
     // Verify password
-    if !verify_password(&credentials.password, &user.password_hash)? {
+    let salt = b"default_salt"; // Should match the salt used during registration
+    if !verify_password(&credentials.password, salt, &hex::decode(&user.password_hash).map_err(|_| anyhow::anyhow!("Invalid password hash"))?) {
         anyhow::bail!("Invalid password");
     }
 
@@ -89,7 +105,7 @@ pub async fn authenticate_user(db: &MongoClient, credentials: UserCredentials) -
 }
 
 // Validate auth token and return user
-pub async fn validate_auth_token(db: &MongoClient, token: &str) -> Result<User> {
+pub async fn validate_auth_token(db: &MongoDBClient, token: &str) -> Result<User> {
     let jwt_secret = env::var("JWT_SECRET").expect("JWT_SECRET must be set");
 
     // Decode and validate JWT token
@@ -113,7 +129,7 @@ pub async fn validate_auth_token(db: &MongoClient, token: &str) -> Result<User> 
 }
 
 // Update user profile
-pub async fn update_user_profile(db: &MongoClient, user_id: &str, profile: UserProfile) -> Result<UserProfile> {
+pub async fn update_user_profile(db: &MongoDBClient, user_id: &str, profile: UserProfile) -> Result<UserProfile> {
     let users_collection = get_users_collection(db);
 
     // Update profile fields
@@ -141,11 +157,10 @@ pub async fn update_user_profile(db: &MongoClient, user_id: &str, profile: UserP
 
 // Create a DID for a user
 pub async fn create_user_did(
-    db: &MongoClient,
+    db: &MongoDBClient,
     blockchain: &BlockchainService,
     user_id: &str,
 ) -> Result<String> {
-    // Generate a new DID using blockchain service
     let did = blockchain.generate_did(user_id).await?;
 
     // Update user with the new DID
@@ -169,23 +184,22 @@ pub async fn create_user_did(
 }
 
 // List all users (admin function)
-pub async fn list_all_users(db: &MongoClient) -> Result<Vec<UserProfile>> {
+pub async fn list_all_users(db: &MongoDBClient) -> Result<Vec<UserProfile>> {
     let users_collection = get_users_collection(db);
 
     let mut cursor = users_collection.find(None, None).await?;
     let mut users = Vec::new();
 
     while cursor.advance().await? {
-        let user: User = bson::from_document(cursor.current().clone())?;
+        let user: User = bson::from_document(Document::try_from(cursor.current().clone())?)?;
         users.push(user.profile);
     }
 
     Ok(users)
 }
 
-// Helper function to get users collection
-fn get_users_collection(db: &MongoClient) -> Collection<Document> {
-    db.database("ssi_db").collection("users")
+fn get_users_collection(db: &MongoDBClient) -> Collection<Document> {
+    db.client.database("ssi_db").collection("users")
 }
 
 // Helper function to generate JWT auth token

@@ -1,9 +1,12 @@
 use std::fmt;
 use std::error::Error;
 use std::io;
-use actix_web::{HttpResponse, ResponseError};
+use axum::{
+    response::{IntoResponse, Response},
+    http::StatusCode,
+    Json,
+};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 #[derive(Debug)]
 pub enum WalletError {
@@ -96,26 +99,51 @@ impl From<serde_json::Error> for WalletError {
     }
 }
 
-impl ResponseError for WalletError {
-    fn error_response(&self) -> HttpResponse {
+impl From<mongodb::error::Error> for WalletError {
+    fn from(error: mongodb::error::Error) -> Self {
+        WalletError::DatabaseError(error.to_string())
+    }
+}
+
+impl From<jsonwebtoken::errors::Error> for WalletError {
+    fn from(error: jsonwebtoken::errors::Error) -> Self {
+        WalletError::JwtError(error.to_string())
+    }
+}
+
+impl From<anyhow::Error> for WalletError {
+    fn from(error: anyhow::Error) -> Self {
+        WalletError::InternalServerError(error.to_string())
+    }
+}
+
+// Implement IntoResponse for Axum compatibility
+impl IntoResponse for WalletError {
+    fn into_response(self) -> Response {
         let (status_code, error_type) = match self {
-            WalletError::AuthenticationError(_) => (actix_web::http::StatusCode::UNAUTHORIZED, "authentication_error"),
-            WalletError::JwtError(_) => (actix_web::http::StatusCode::UNAUTHORIZED, "jwt_error"),
-            WalletError::Unauthorized(_) => (actix_web::http::StatusCode::FORBIDDEN, "forbidden"),
+            WalletError::AuthenticationError(_) => (StatusCode::UNAUTHORIZED, "authentication_error"),
+            WalletError::JwtError(_) => (StatusCode::UNAUTHORIZED, "jwt_error"),
+            WalletError::Unauthorized(_) => (StatusCode::FORBIDDEN, "forbidden"),
             WalletError::WalletNotFound(_) | WalletError::CredentialNotFound(_) =>
-                (actix_web::http::StatusCode::NOT_FOUND, "not_found"),
-            WalletError::ValidationError(_) => (actix_web::http::StatusCode::BAD_REQUEST, "validation_error"),
-            WalletError::NotImplemented => (actix_web::http::StatusCode::NOT_IMPLEMENTED, "not_implemented"),
-            _ => (actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, "internal_server_error"),
+                (StatusCode::NOT_FOUND, "not_found"),
+            WalletError::ValidationError(_) => (StatusCode::BAD_REQUEST, "validation_error"),
+            WalletError::NotImplemented => (StatusCode::NOT_IMPLEMENTED, "not_implemented"),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal_server_error"),
         };
 
-        HttpResponse::build(status_code)
-            .json(json!({
-                "error": error_type,
-                "message": self.to_string(),
-                "code": status_code.as_u16()
-            }))
+        let error_response = ErrorResponse {
+            error: error_type.to_string(),
+            message: self.to_string(),
+            code: status_code.as_u16(),
+        };
+
+        (status_code, Json(error_response)).into_response()
     }
+}
+
+// Helper function for creating error responses
+pub fn create_error_response(error: WalletError) -> Response {
+    error.into_response()
 }
 
 // Helper macro for convenient error creation
@@ -125,3 +153,6 @@ macro_rules! wallet_err {
         crate::utils::errors::WalletError::$err_type($msg.to_string())
     };
 }
+
+// Result type alias for convenience
+pub type WalletResult<T> = Result<T, WalletError>;

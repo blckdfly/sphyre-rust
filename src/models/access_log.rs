@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessLog {
@@ -13,19 +14,15 @@ pub struct AccessLog {
     pub user_agent: Option<String>,
     pub success: bool,
     pub timestamp: DateTime<Utc>,
+    pub created_at: DateTime<Utc>
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ResourceType {
-    #[serde(rename = "did")]
     DID,
-    #[serde(rename = "credential")]
     Credential,
-    #[serde(rename = "consent")]
     Consent,
-    #[serde(rename = "profile")]
     Profile,
-    #[serde(rename = "other")]
     Other,
 }
 
@@ -56,4 +53,27 @@ pub struct AccessLogFilter {
     pub start_date: Option<DateTime<Utc>>,
     pub end_date: Option<DateTime<Utc>>,
     pub success: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AccessPolicy {
+    pub id: String,
+    pub user_id: String,
+    pub resource_id: String,
+    pub resource_type: String,
+    pub action: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AccessPolicyInput {
+    pub resource_id: String,
+    pub resource_type: String,
+    pub action: String,
+}
+
+impl fmt::Display for ResourceType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self) // or return a custom string representation
+    }
 }

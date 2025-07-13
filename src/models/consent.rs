@@ -69,3 +69,12 @@ pub struct ConsentRequest {
     pub scope: Vec<ConsentScope>,
     pub expiration: Option<DateTime<Utc>>,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ConsentInput {
+    pub requester_id: String,
+    pub requester_name: String,
+    pub purpose: String,
+    pub scope: Vec<ConsentScope>,
+    pub expiration: Option<DateTime<Utc>>,
+}

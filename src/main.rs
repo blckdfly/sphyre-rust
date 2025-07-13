@@ -9,9 +9,8 @@ mod routes;
 mod constant;
 
 use crate::api::routes::create_routes;
-
-use crate::db::mongodb::init_database as connect_database;
-use axum::Server;
+use crate::db::mongodb::init_database;
+use tokio::net::TcpListener;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::{info, Level};
@@ -34,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
     info!("Configuration loaded successfully");
 
     // Connect to MongoDB
-    let db_client = connect_database(&config.mongodb_uri).await?;
+    let db_client = init_database(&config.mongodb_uri).await?;
     info!("Connected to MongoDB");
 
     // Initialize blockchain connection if enabled
@@ -51,14 +50,16 @@ async fn main() -> anyhow::Result<()> {
         blockchain: blockchain_service,
     });
 
-    // Create application with routes
     let app = create_routes(state);
 
     // Run the server
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     info!("Server listening on {}", addr);
-    Server::bind(&addr)
-        .serve(app.into_make_service())
+
+    let listener = TcpListener::bind(addr).await
+        .map_err(|e| anyhow::anyhow!("Failed to bind to address {}: {}", addr, e))?;
+
+    axum::serve(listener, app)
         .await
         .map_err(|e| anyhow::anyhow!("Server error: {}", e))?;
 

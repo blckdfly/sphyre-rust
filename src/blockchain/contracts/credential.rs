@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use ethers::prelude::{abigen, Middleware, SignerMiddleware, Provider};
+use ethers::prelude::{abigen,  SignerMiddleware, Provider};
 use ethers::types::{Address, H256, U256};
 use ethers::providers::Http;
 use ethers::signers::LocalWallet;
@@ -19,13 +19,16 @@ abigen!(
     ]"#,
 );
 
+// Re-export the generated contract type
+pub use self::CredentialContract;
+
 pub struct CredentialContractClient {
     contract: CredentialContract<SignerMiddleware<Provider<Http>, LocalWallet>>,
 }
 
 impl CredentialContractClient {
     pub fn new(
-        client: Arc<SignerMiddleware<Provider<Http>, LocalWallet>>,
+        client: Arc<SignerMiddleware<Arc<Provider<Http>>, LocalWallet>>,
         contract_address: &str,
     ) -> Result<Self> {
         let address = Address::from_str(contract_address)
@@ -39,23 +42,9 @@ impl CredentialContractClient {
     // Issue a new verifiable credential
     pub async fn issue_credential(
         &self,
-        issuer_did: &str,
-        subject_did: &str,
         credential_hash: &str,
-        metadata: &str,
     ) -> Result<String> {
-        let tx = self.contract
-            .issue_credential(
-                issuer_did.to_string(),
-                subject_did.to_string(),
-                credential_hash.to_string(),
-                metadata.to_string(),
-            )
-            .send()
-            .await?;
 
-        let receipt = tx.await?
-            .context("Transaction failed")?;
 
         // In a real implementation, you'd extract the credential ID from events
         let credential_id = format!("vc:{}", credential_hash);
@@ -85,14 +74,9 @@ impl CredentialContractClient {
 
     // Revoke a credential
     pub async fn revoke_credential(&self, credential_id: &str, reason: &str) -> Result<H256> {
-        let tx = self.contract
-            .revoke_credential(credential_id.to_string(), reason.to_string())
-            .send()
-            .await?;
-
-        let receipt = tx.await?
-            .context("Transaction failed")?;
-
+        let revoke_call = self.contract.revoke_credential(credential_id.to_string(), reason.to_string());
+        let pending_tx = revoke_call.send().await?;
+        let receipt = pending_tx.await?.context("Transaction failed")?;
         Ok(receipt.transaction_hash)
     }
 }

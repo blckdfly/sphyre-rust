@@ -4,13 +4,12 @@ pub mod routes;
 
 use crate::blockchain::BlockchainService;
 use crate::config::settings::Settings;
-use mongodb::Client as MongoClient;
-use std::sync::Arc;
+use crate::db::mongodb::MongoDBClient;
 
 // Application state that will be shared across all routes
 pub struct AppState {
     pub config: Settings,
-    pub db: MongoClient,
+    pub db: MongoDBClient,
     pub blockchain: Option<BlockchainService>,
 }
 

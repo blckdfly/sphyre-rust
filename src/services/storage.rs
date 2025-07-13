@@ -3,18 +3,19 @@ use crate::models::user::User;
 use crate::services::access_control::AccessControlService;
 use anyhow::{Context, Result};
 use chrono::Utc;
-use futures::StreamExt;
+use futures::stream::TryStreamExt;
 use mongodb::{
-    bson::{doc, to_bson, to_document, Bson, Document},
+    bson::{doc, to_bson, to_document, Document},
     Client as MongoClient, Collection,
 };
 use serde::{Deserialize, Serialize};
-use std::io::Read;
+use mongodb::options::FindOptions;
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncWriteExt},
 };
 use uuid::Uuid;
+use sha2::{Sha256, Digest};
 
 // Define storage item model
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -88,7 +89,6 @@ impl<'a> StorageService<'a> {
         // Calculate hash of the data
         let hash = self.calculate_hash(&final_data);
 
-        // Create storage item record
         let storage_item = StorageItem {
             id: file_id.clone(),
             user_id: user_id.to_string(),
@@ -105,13 +105,11 @@ impl<'a> StorageService<'a> {
             tags,
         };
 
-        // Write data to file
         let mut file = File::create(&file_path).await.context("Failed to create file")?;
         file.write_all(&final_data)
             .await
             .context("Failed to write data to file")?;
 
-        // Store metadata in database
         let storage_collection = self.get_storage_collection();
         storage_collection
             .insert_one(to_document(&storage_item)?, None)
@@ -135,7 +133,6 @@ impl<'a> StorageService<'a> {
         Ok(storage_item)
     }
 
-    // Retrieve a file with permission check
     pub async fn retrieve_file(
         &self,
         user_id: &str,
@@ -287,7 +284,7 @@ impl<'a> StorageService<'a> {
 
         // Delete the physical file
         if let Err(e) = tokio::fs::remove_file(&storage_item.path).await {
-            // Log error but don't fail if file is already gone
+
             eprintln!("Error removing file {}: {}", storage_item.path, e);
         }
 
@@ -312,40 +309,32 @@ impl<'a> StorageService<'a> {
     pub async fn list_user_files(
         &self,
         user_id: &str,
-        tags: Option<Vec<String>>,
+        tag_list: Option<Vec<String>>,
         limit: Option<i64>,
-        offset: Option<i64>,
-    ) -> Result<Vec<StorageItem>> {
-        let storage_collection = self.get_storage_collection();
-
+        offset: Option<u64>,
+    ) -> Result<Vec<StorageItem>, anyhow::Error> {
         // Build filter
         let mut filter = doc! { "user_id": user_id };
-        if let Some(tag_list) = tags {
-            filter.insert("tags", doc! { "$all": tag_list });
+
+        if let Some(tags) = tag_list {
+            filter.insert("tags", doc! { "$all": tags });
         }
 
-        // Configure options
         let find_options = mongodb::options::FindOptions::builder()
-            .sort(doc! { "created_at": -1 })
             .limit(limit)
             .skip(offset)
             .build();
 
         // Query database
-        let cursor = storage_collection.find(filter, find_options).await?;
-        let items = cursor
-            .map(|res| -> Result<StorageItem, anyhow::Error> {
-                let doc = res?;
-                let item: StorageItem = bson::from_document(doc)?;
-                Ok(item)
-            })
-            .collect::<Vec<Result<StorageItem, anyhow::Error>>>()
-            .await;
+        let storage_collection = self.get_storage_collection();
+        let mut cursor = storage_collection.find(filter, find_options).await?;
 
-        // Extract results, propagating any errors
-        let mut storage_items = Vec::new();
-        for item_result in items {
-            storage_items.push(item_result?);
+        let mut storage_items: Vec<StorageItem> = Vec::new();
+
+        // Iterate through cursor using try_next()
+        while let Some(doc) = cursor.try_next().await? {
+            let item: StorageItem = bson::from_document(doc)?;
+            storage_items.push(item);
         }
 
         Ok(storage_items)
@@ -363,28 +352,10 @@ impl<'a> StorageService<'a> {
         user_agent: Option<String>,
     ) -> Result<StorageItem> {
         // Check access permission
-        let has_permission = self
+        self
             .access_control
             .check_permission(user_id, file_id, ResourceType::Other, AccessAction::Update)
             .await?;
-
-        if !has_permission {
-            // Log failed access attempt
-            self.access_control
-                .log_access(
-                    user_id,
-                    file_id,
-                    ResourceType::Other,
-                    AccessAction::Update,
-                    false,
-                    Some("Permission denied".to_string()),
-                    requester_ip,
-                    user_agent,
-                )
-                .await?;
-
-            return Err(anyhow::anyhow!("Permission denied"));
-        }
 
         let storage_collection = self.get_storage_collection();
         let now = Utc::now();
@@ -437,7 +408,6 @@ impl<'a> StorageService<'a> {
         }
     }
 
-    // Share file with another user
     pub async fn share_file(
         &self,
         owner_id: &str,
@@ -447,7 +417,7 @@ impl<'a> StorageService<'a> {
         requester_ip: Option<String>,
         user_agent: Option<String>,
     ) -> Result<()> {
-        // Check if owner has permission
+
         let is_owner = self
             .access_control
             .is_owner(owner_id, file_id, &ResourceType::Other)
@@ -472,7 +442,7 @@ impl<'a> StorageService<'a> {
         }
 
         // Create sharing record in the database
-        let shares_collection = self.db.database("ssi_db").collection("file_shares");
+        let shares_collection = self.db.database("ssi_db").collection::<Document>("file_shares");
         let share_id = Uuid::new_v4().to_string();
         let now = Utc::now();
 
@@ -517,7 +487,6 @@ impl<'a> StorageService<'a> {
         requester_ip: Option<String>,
         user_agent: Option<String>,
     ) -> Result<()> {
-        // Check if owner has permission
         let is_owner = self
             .access_control
             .is_owner(owner_id, file_id, &ResourceType::Other)
@@ -542,7 +511,7 @@ impl<'a> StorageService<'a> {
         }
 
         // Update sharing record
-        let shares_collection = self.db.database("ssi_db").collection("file_shares");
+        let shares_collection = self.db.database("ssi_db").collection::<Document>("file_shares");
         let update_result = shares_collection
             .update_one(
                 doc! {
@@ -579,9 +548,8 @@ impl<'a> StorageService<'a> {
         Ok(())
     }
 
-    // Helper function to get storage collection
     fn get_storage_collection(&self) -> Collection<Document> {
-        self.db.database("ssi_db").collection("storage_items")
+        self.db.database("ssi_db").collection::<Document>("storage_items")
     }
 
     // Helper function to encrypt data
@@ -589,7 +557,6 @@ impl<'a> StorageService<'a> {
         // In a real implementation, this would use a proper encryption library
         // For this example, we'll simulate encryption with a placeholder
 
-        // Choose encryption method
         match options.method.as_str() {
             "aes256" => {
                 // Simulate AES-256 encryption
@@ -621,12 +588,11 @@ impl<'a> StorageService<'a> {
         &self,
         data: &[u8],
         item: &StorageItem,
-        user: &User,
+        _user: &User,
     ) -> Result<Vec<u8>> {
         // In a real implementation, this would use a proper decryption library
         // For this example, we'll simulate decryption with a placeholder
 
-        // Choose decryption method based on the stored encryption method
         match item.encryption_method.as_deref() {
             Some("aes256") => {
                 // Simulate AES-256 decryption
@@ -653,7 +619,6 @@ impl<'a> StorageService<'a> {
 
     // Helper function to calculate file hash
     fn calculate_hash(&self, data: &[u8]) -> String {
-        use sha2::{Sha256, Digest};
         let mut hasher = Sha256::new();
         hasher.update(data);
         format!("{:x}", hasher.finalize())

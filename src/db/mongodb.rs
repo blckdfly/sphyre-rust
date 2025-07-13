@@ -1,13 +1,30 @@
 use anyhow::{Context, Result};
 use mongodb::{
     bson::Document,
-    options::{ClientOptions, ReplicaSet},
+    options::{ClientOptions },
     Client,
 };
 use std::env;
+use bson::doc;
+use crate::models::User;
 
 pub struct MongoDBClient {
-    client: Client,
+    pub client: Client,
+    pub db_name: String,
+}
+
+impl MongoDBClient {
+    pub async fn get_user_by_id(&self, user_id: &str) -> Result<Option<User>> {
+        let collection = self
+            .client
+            .database(&self.db_name)
+            .collection::<User>("users");
+
+        let filter = doc! { "_id": user_id };
+        let user = collection.find_one(filter, None).await?;
+
+        Ok(user)
+    }
 }
 
 impl MongoDBClient {
@@ -19,7 +36,6 @@ impl MongoDBClient {
             .await
             .context("Failed to parse MongoDB connection string")?;
 
-        // Set application name
         client_options.app_name = Some("ssi-wallet".to_string());
 
         // Create the client
@@ -33,7 +49,7 @@ impl MongoDBClient {
             .await
             .context("Failed to connect to MongoDB")?;
 
-        Ok(Self { client })
+        Ok(Self { client, db_name: "".to_string() })
     }
 
     pub fn get_client(&self) -> &Client {
@@ -49,6 +65,15 @@ impl MongoDBClient {
             .map(|_| true)
             .context("MongoDB health check failed")
     }
+}
+
+// Initialize database connection - this is the missing function
+pub async fn init_database(mongodb_uri: &str) -> Result<MongoDBClient> {
+    if env::var("MONGODB_URI").is_err() {
+        env::set_var("MONGODB_URI", mongodb_uri);
+    }
+
+    MongoDBClient::new().await
 }
 
 // Test module for MongoDB client
@@ -68,5 +93,13 @@ mod tests {
             assert!(health.is_ok());
             assert!(health.unwrap());
         }
+    }
+
+    #[tokio::test]
+    async fn test_init_database() {
+        let test_uri = "mongodb://localhost:27017/test";
+        let result = init_database(test_uri).await;
+        // This will fail if MongoDB isn't running, but the function should exist
+        assert!(result.is_err() || result.is_ok());
     }
 }

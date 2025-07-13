@@ -1,11 +1,10 @@
-use crate::models::access_log::{AccessAction, AccessLog, ResourceType};
-use crate::models::consent::{Consent, ConsentStatus};
+use crate::models::access_log::{AccessAction, AccessLog, ResourceType, AccessPolicy, AccessPolicyInput};
 use crate::models::user::User;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use futures::TryStreamExt;
 use mongodb::{
-    bson::{doc, to_document},
+    bson::{doc,  Document},
     Client as MongoClient, Collection,
 };
 use uuid::Uuid;
@@ -71,17 +70,17 @@ impl<'a> AccessControlService<'a> {
             user_agent,
             success,
             timestamp: Utc::now(),
+            created_at: Utc::now(),
         };
 
         logs_collection
-            .insert_one(to_document(&log)?, None)
+            .insert_one(log, None)
             .await
             .context("Failed to insert access log")?;
 
         Ok(())
     }
 
-    // Check if user is an admin
     async fn is_admin(&self, user_id: &str) -> Result<bool> {
         let users_collection = self.get_users_collection();
 
@@ -98,7 +97,6 @@ impl<'a> AccessControlService<'a> {
         }
     }
 
-    // Check if user is the owner of a resource
     pub(crate) async fn is_owner(&self, user_id: &str, resource_id: &str, resource_type: &ResourceType) -> Result<bool> {
         match resource_type {
             ResourceType::DID => {
@@ -110,7 +108,7 @@ impl<'a> AccessControlService<'a> {
             }
             ResourceType::Credential => {
                 // Check if the credential belongs to the user
-                let credentials_collection = self.db.database("ssi_db").collection("credentials");
+                let credentials_collection: Collection<Document> = self.db.database("ssi_db").collection("credentials");
                 let result = credentials_collection
                     .find_one(
                         doc! {
@@ -124,7 +122,7 @@ impl<'a> AccessControlService<'a> {
             }
             ResourceType::Consent => {
                 // Check if the consent involves the user
-                let consents_collection = self.db.database("ssi_db").collection("consents");
+                let consents_collection: Collection<Document> = self.db.database("ssi_db").collection("consents");
                 let result = consents_collection
                     .find_one(
                         doc! {
@@ -151,7 +149,6 @@ impl<'a> AccessControlService<'a> {
         }
     }
 
-    // Check if user has consent to access a resource
     async fn has_consent(
         &self,
         user_id: &str,
@@ -159,7 +156,7 @@ impl<'a> AccessControlService<'a> {
         resource_type: &ResourceType,
         action: &AccessAction,
     ) -> Result<bool> {
-        let consents_collection = self.db.database("ssi_db").collection("consents");
+        let consents_collection: Collection<Document> = self.db.database("ssi_db").collection("consents");
 
         // Find relevant active consents
         let now = Utc::now();
@@ -251,11 +248,103 @@ impl<'a> AccessControlService<'a> {
     }
 
     // Helper functions to get collections
-    fn get_users_collection(&self) -> Collection<mongodb::bson::Document> {
+    fn get_users_collection(&self) -> Collection<Document> {
         self.db.database("ssi_db").collection("users")
     }
 
-    fn get_access_logs_collection(&self) -> Collection<mongodb::bson::Document> {
+    fn get_access_logs_collection(&self) -> Collection<AccessLog> {
         self.db.database("ssi_db").collection("access_logs")
+    }
+}
+
+// Standalone functions for use in handlers
+pub async fn list_user_policies(db: &MongoClient, user_id: &str) -> Result<Vec<AccessPolicy>> {
+    let collection: Collection<AccessPolicy> = db.database("ssi_db").collection("access_policies");
+    let cursor = collection
+        .find(doc! { "user_id": user_id }, None)
+        .await?;
+    let policies = cursor.try_collect().await?;
+    Ok(policies)
+}
+
+pub async fn get_policy_by_id(
+    db: &MongoClient,
+    policy_id: &str,
+    user_id: &str,
+) -> Result<AccessPolicy> {
+    let collection: Collection<AccessPolicy> = db.database("ssi_db").collection("access_policies");
+    let result = collection
+        .find_one(doc! { "id": policy_id, "user_id": user_id }, None)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Access policy not found"))?;
+    Ok(result)
+}
+
+pub async fn create_access_policy(
+    db: &MongoClient,
+    _blockchain: &impl std::fmt::Debug,
+    user_id: &str,
+    input: AccessPolicyInput,
+) -> Result<AccessPolicy> {
+    let new_policy = AccessPolicy {
+        id: Uuid::new_v4().to_string(),
+        user_id: user_id.to_string(),
+        resource_id: input.resource_id,
+        resource_type: input.resource_type,
+        action: input.action,
+        created_at: Utc::now(),
+    };
+
+    let collection: Collection<AccessPolicy> = db.database("ssi_db").collection("access_policies");
+    collection
+        .insert_one(new_policy.clone(), None)
+        .await?;
+
+    Ok(new_policy)
+}
+
+pub async fn update_policy_by_id(
+    db: &MongoClient,
+    _blockchain: &impl std::fmt::Debug,
+    policy_id: &str,
+    user_id: &str,
+    input: AccessPolicyInput,
+) -> Result<AccessPolicy> {
+    let collection: Collection<AccessPolicy> = db.database("ssi_db").collection("access_policies");
+
+    let update_doc = doc! {
+        "$set": {
+            "resource_id": input.resource_id,
+            "resource_type": input.resource_type.to_string(),
+            "action": input.action.to_string(),
+        }
+    };
+
+    let result = collection
+        .find_one_and_update(
+            doc! { "id": policy_id, "user_id": user_id },
+            update_doc,
+            None,
+        )
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Access policy not found"))?;
+
+    Ok(result)
+}
+
+pub async fn revoke_policy_by_id(
+    db: &MongoClient,
+    _blockchain: &impl std::fmt::Debug,
+    policy_id: &str,
+    user_id: &str,
+) -> Result<bool> {
+    let collection: Collection<AccessPolicy> = db.database("ssi_db").collection("access_policies");
+    let result = collection
+        .delete_one(doc! { "id": policy_id, "user_id": user_id }, None)
+        .await?;
+    if result.deleted_count == 0 {
+        Err(anyhow::anyhow!("Access policy not found"))
+    } else {
+        Ok(true)
     }
 }

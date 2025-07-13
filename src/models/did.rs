@@ -23,6 +23,7 @@ pub struct VerificationMethod {
     pub controller: String,
     pub public_key_jwk: Option<JWK>,
     pub public_key_multibase: Option<String>,
+    pub public_key_hex: ()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

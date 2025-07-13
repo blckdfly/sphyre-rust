@@ -1,5 +1,5 @@
 pub mod env;
 pub mod jwt;
-mod crypto;
+pub(crate) mod crypto;
 mod ipfs;
 mod errors;

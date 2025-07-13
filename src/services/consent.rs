@@ -1,5 +1,6 @@
-use crate::models::consent::{Consent, ConsentBlockchainReceipt, ConsentEvidence, ConsentRequest, ConsentStatus};
-use crate::services::blockchain::BlockchainService;
+use std::sync::Arc;
+use crate::models::consent::{Consent, ConsentBlockchainReceipt, ConsentEvidence, ConsentRequest, ConsentStatus, ConsentInput};
+use crate::services::blockchain::{BlockchainService, IBlockchainService};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use mongodb::{
@@ -61,8 +62,8 @@ impl<'a> ConsentService<'a> {
             .find_one(doc! { "id": consent_id }, None)
             .await?;
 
-        let mut consent = match result {
-            Some(doc) => bson::from_document(doc)?,
+        let mut consent: Consent = match result {
+            Some(doc) => bson::from_document::<Consent>(doc)?,
             None => return Err(anyhow::anyhow!("Consent not found")),
         };
 
@@ -110,7 +111,7 @@ impl<'a> ConsentService<'a> {
             .find_one(doc! { "id": consent_id }, None)
             .await?;
 
-        let mut consent = match result {
+        let mut consent: Consent = match result {
             Some(doc) => bson::from_document(doc)?,
             None => return Err(anyhow::anyhow!("Consent not found")),
         };
@@ -119,7 +120,6 @@ impl<'a> ConsentService<'a> {
         consent.status = ConsentStatus::Revoked;
         consent.updated_at = Utc::now();
 
-        // Register revocation on blockchain
         let tx_hash = self
             .revoke_consent_on_blockchain(&consent_id)
             .await?;
@@ -205,7 +205,7 @@ impl<'a> ConsentService<'a> {
         requester_id: &str,
         scope: &str,
     ) -> Result<bool> {
-        let consents_collection = self.db.database("ssi_db").collection("consents");
+        let consents_collection = self.db.database("ssi_db").collection::<Consent>("consents");
 
         // Find active consents with matching scope
         let now = Utc::now();
@@ -228,7 +228,6 @@ impl<'a> ConsentService<'a> {
         Ok(result.is_some())
     }
 
-    // Register consent on blockchain
     async fn register_consent_on_blockchain(
         &self,
         consent_id: &str,
@@ -251,7 +250,6 @@ impl<'a> ConsentService<'a> {
             )
             .await?;
 
-        // Extract transaction hash from result
         Ok(result["result"].as_str().unwrap_or_default().to_string())
     }
 
@@ -269,7 +267,98 @@ impl<'a> ConsentService<'a> {
             )
             .await?;
 
-        // Extract transaction hash from result
         Ok(result["result"].as_str().unwrap_or_default().to_string())
     }
+}
+
+// Wrapper functions for API handlers
+pub async fn create_new_consent(
+    db: &MongoClient,
+    blockchain: &dyn IBlockchainService,
+    user_id: &str,
+    consent_input: ConsentInput,
+) -> Result<Consent> {
+    let consent_service = ConsentService::new(db, blockchain);
+    let consent_request = ConsentRequest {
+        requester_id: consent_input.requester_id,
+        requester_name: consent_input.requester_name,
+        purpose: consent_input.purpose,
+        scope: consent_input.scope,
+        expiration: consent_input.expiration,
+    };
+
+    let consent = consent_service.request_consent(user_id, consent_request).await?;
+
+    // Auto-grant for now (in a real system, this would require user interaction)
+    consent_service.grant_consent(&consent.id, None, None).await
+}
+
+pub async fn get_consent_by_id(
+    db: &MongoClient,
+    consent_id: &str,
+    user_id: &str,
+) -> Result<Consent> {
+    let blockchain_service = BlockchainService::new("", "", Arc::new(()), "".to_string(), "".to_string());
+    let consent_service = ConsentService::new(db, &blockchain_service);
+    let consent = consent_service.get_consent(consent_id).await?;
+
+    if consent.user_id != user_id {
+        return Err(anyhow::anyhow!("Not authorized to access this consent"));
+    }
+
+    Ok(consent)
+}
+
+pub async fn list_user_consents(
+    db: &MongoClient,
+    user_id: &str,
+) -> Result<Vec<Consent>> {
+    let blockchain_service = BlockchainService::new("", "", Arc::new(()), "".to_string(), "".to_string());
+    let consent_service = ConsentService::new(db, &blockchain_service);
+    consent_service.get_user_consents(user_id).await
+}
+
+pub async fn update_consent_by_id(
+    db: &MongoClient,
+    blockchain: &dyn IBlockchainService,
+    consent_id: &str,
+    user_id: &str,
+    consent_input: ConsentInput,
+) -> Result<Consent> {
+    let consent_service = ConsentService::new(db, blockchain);
+
+    let existing_consent = consent_service.get_consent(consent_id).await?;
+    if existing_consent.user_id != user_id {
+        return Err(anyhow::anyhow!("Not authorized to update this consent"));
+    }
+
+    // Create a new consent with updated data (simplified approach)
+    let consent_request = ConsentRequest {
+        requester_id: consent_input.requester_id,
+        requester_name: consent_input.requester_name,
+        purpose: consent_input.purpose,
+        scope: consent_input.scope,
+        expiration: consent_input.expiration,
+    };
+
+    // For now, create a new consent (in a real system, you'd update the existing one)
+    let updated_consent = consent_service.request_consent(user_id, consent_request).await?;
+    consent_service.grant_consent(&updated_consent.id, None, None).await
+}
+
+pub async fn revoke_consent_by_id(
+    db: &MongoClient,
+    blockchain: &dyn IBlockchainService,
+    consent_id: &str,
+    user_id: &str,
+) -> Result<bool> {
+    let consent_service = ConsentService::new(db, blockchain);
+
+    let existing_consent = consent_service.get_consent(consent_id).await?;
+    if existing_consent.user_id != user_id {
+        return Err(anyhow::anyhow!("Not authorized to revoke this consent"));
+    }
+
+    consent_service.revoke_consent(consent_id).await?;
+    Ok(true)
 }

@@ -1,67 +1,105 @@
-use crate::api::{ApiError, AppState};
-use crate::models::user::User;
-use crate::services::identity::validate_auth_token;
+use crate::api::AppState;
 use axum::{
-    body::Body,
     extract::State,
-    http::{Request},
+    http::{HeaderMap, StatusCode},
     middleware::Next,
     response::Response,
+    body::Body,
 };
+use hyper::Request;
 use std::sync::Arc;
+use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
+use serde::{Deserialize, Serialize};
 
-// Authentication middleware
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Claims {
+    pub sub: String,
+    pub email: String,
+    pub exp: usize,
+}
+
 pub async fn authenticate(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     mut request: Request<Body>,
-    next: Next<Body>,
-) -> Result<Response, ApiError> {
-    let token = extract_token_from_header(&request)
-        .ok_or_else(|| ApiError::AuthError("Missing or invalid authorization header".to_string()))?;
-
-    // Validate token and get user data
-    let user = validate_auth_token(&state.db, &token)
-        .await
-        .map_err(|e| ApiError::AuthError(e.to_string()))?;
-
-    // Store user in request extensions
-    request.extensions_mut().insert(user);
-
-    // Continue with the request
-    Ok(next.run(request).await)
-}
-
-// Admin authorization middleware (additional layer after authentication)
-pub async fn authorize_admin(
-    State(..): State<Arc<AppState>>,
-    request: Request<Body>,
-    next: Next<Body>,
-) -> Result<Response, ApiError> {
-    let user = request
-        .extensions()
-        .get::<User>()
-        .cloned()
-        .ok_or_else(|| ApiError::AuthError("User not authenticated".to_string()))?;
-
-    if !user.is_admin {
-        return Err(ApiError::AccessDenied("Admin access required".to_string()));
-    }
-
-    // Continue with the request
-    Ok(next.run(request).await)
-}
-
-// Helper function to extract token from Authorization header
-fn extract_token_from_header(request: &Request<Body>) -> Option<String> {
-    request
-        .headers()
+    next: Next,
+) -> Result<Response, StatusCode> {
+    // Extract the Authorization header
+    let auth_header = headers
         .get("Authorization")
         .and_then(|header| header.to_str().ok())
-        .and_then(|value| {
-            if value.starts_with("Bearer ") {
-                Some(value[7..].to_string())
-            } else {
-                None
-            }
-        })
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    if !auth_header.starts_with("Bearer ") {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    // Extract the token
+    let token = &auth_header[7..]; // Remove "Bearer " prefix
+
+    // Decode and validate the JWT token
+    let token_data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(state.config.jwt_secret.as_ref()),
+        &Validation::new(Algorithm::HS256),
+    )
+    .map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+    // Fetch the user from the database
+    let user = state
+        .db
+        .get_user_by_id(&token_data.claims.sub)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    // Insert the user into request extensions
+    request.extensions_mut().insert(user);
+
+    // Continue to the next middleware/handler
+    Ok(next.run(request).await)
+}
+
+pub async fn authorize_admin(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    mut request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    // First, authenticate the user
+    let auth_header = headers
+        .get("Authorization")
+        .and_then(|header| header.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    if !auth_header.starts_with("Bearer ") {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    // Extract the token
+    let token = &auth_header[7..]; // Remove "Bearer " prefix
+
+    // Decode and validate the JWT token
+    let token_data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(state.config.jwt_secret.as_ref()),
+        &Validation::new(Algorithm::HS256),
+    )
+    .map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+    let user = state
+        .db
+        .get_user_by_id(&token_data.claims.sub)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    if !user.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // Insert the user into request extensions
+    request.extensions_mut().insert(user);
+
+    Ok(next.run(request).await)
 }

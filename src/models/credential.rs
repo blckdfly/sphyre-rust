@@ -1,6 +1,21 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use serde_json::Value;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Credential {
+    pub id: String,
+    pub issuer: String,
+    pub issuance_date: DateTime<Utc>,
+    pub expiration_date: Option<DateTime<Utc>>,
+    pub credential_subject: serde_json::Value,
+    pub schema_id: Option<String>,
+    pub subject_id: String,
+    pub credential_type: String,
+    pub status: Option<CredentialStatus>,
+    pub claims: Value,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifiableCredential {
@@ -14,6 +29,9 @@ pub struct VerifiableCredential {
     pub credential_subject: CredentialSubject,
     pub proof: CredentialProof,
     pub status: Option<CredentialStatus>,
+    pub credential: Credential,
+    pub evidence: Option<CredentialEvidence>,
+
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,6 +49,10 @@ pub struct CredentialProof {
     pub proof_purpose: String,
     pub proof_value: String,
     pub jws: Option<String>,
+    pub signature: String,
+    pub signature_type: String,
+    pub purpose: String,
+
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +76,15 @@ pub struct VerifiablePresentation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialEvidence {
+    pub id: String,
+    pub type_: String,
+    pub transaction_hash: String,
+    pub blockchain: String,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PresentationProof {
     pub type_: String,
     pub created: DateTime<Utc>,
@@ -71,6 +102,22 @@ pub struct CredentialRequest {
     pub subject_id: String,
     pub claims: HashMap<String, serde_json::Value>,
     pub expiration_date: Option<DateTime<Utc>>,
+    pub subject_did: String,
+    pub schema_id: Option<String>,
+    pub expiration: Option<DateTime<Utc>>,
+
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialResponse {
+    pub credential: VerifiableCredential,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RevocationRequest {
+    pub credential_id: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -79,6 +126,10 @@ pub struct PresentationRequest {
     pub requested_credentials: Vec<RequestedCredential>,
     pub challenge: String,
     pub domain: Option<String>,
+    pub credentials: Vec<String>, // credential IDs
+    pub holder_did: String,
+    pub disclosed_attributes: Vec<String>,
+
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -107,4 +158,41 @@ pub enum PredicateType {
     LessThan,
     #[serde(rename = "==")]
     Equal,
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialSchema {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub attributes: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialInput {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub attributes: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub subject_id: String,
+    pub credential_type: String,
+    pub claims: Value,
+    pub schema_id: (),
+    pub expiration: ()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialVerification {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub attributes: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub credential_id: String
 }

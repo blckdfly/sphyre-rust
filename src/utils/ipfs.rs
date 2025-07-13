@@ -3,7 +3,6 @@ use crate::utils::errors::WalletError;
 use reqwest::Client;
 use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
-use std::io::Cursor;
 use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
@@ -11,7 +10,6 @@ use tokio::io::AsyncReadExt;
 /// Type alias for Result with WalletError
 pub type Result<T> = std::result::Result<T, WalletError>;
 
-/// Response structure from IPFS add command
 #[derive(Debug, Serialize, Deserialize)]
 pub struct IpfsAddResponse {
     pub name: String,

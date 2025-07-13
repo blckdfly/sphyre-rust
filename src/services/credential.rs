@@ -3,21 +3,182 @@ use crate::models::credential::{
     Credential, CredentialEvidence, CredentialProof, CredentialSchema, CredentialStatus,
     VerifiableCredential,
 };
-use crate::models::did::DIDDocument;
+
 use crate::services::blockchain::BlockchainService;
+use crate::blockchain::BlockchainService as ExternalBlockchainService;
 use crate::utils::crypto::{generate_signature, verify_signature, hash_data};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use ethers::signers::{LocalWallet, Signer};
+use ethers::middleware::SignerMiddleware;
 use mongodb::{
-    bson::{doc, to_bson, to_document},
+    bson::{doc, to_document},
     Client as MongoClient,
 };
+use futures::TryStreamExt;
 use serde_json::json;
 use std::env;
-use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
+use crate::models::CredentialSubject;
+use crate::models::credential::CredentialInput;
+use crate::models::credential::CredentialVerification;
+use crate::db::mongodb::MongoDBClient;
+
+// Standalone functions for use in handlers
+pub async fn issue_credential(
+    db: &MongoDBClient,
+    blockchain: &ExternalBlockchainService,
+    user_id: &str,
+    credential_input: CredentialInput,
+) -> Result<Credential> {
+    let mut service = CredentialService::new(&db.client, blockchain);
+
+    // Convert CredentialInput to the parameters needed by the service method
+    let credential = service.issue_credential(
+        user_id, // issuer_did
+        &credential_input.subject_id, // subject_did
+        &credential_input.credential_type, // credential_type
+        credential_input.claims, // claims
+        credential_input.schema_id.as_deref(), // schema_id
+        credential_input.expiration, // expiration
+    ).await?;
+
+    // Convert VerifiableCredential to Credential for the API response
+    Ok(Credential {
+        id: credential.credential.id,
+        issuer: credential.credential.issuer,
+        subject_id: credential.credential.credential_subject["id"].as_str().unwrap_or("").to_string(),
+        credential_type: credential.credential.credential_subject["type"].as_str().unwrap_or("").to_string(),
+        issuance_date: credential.credential.issuance_date,
+        expiration_date: credential.credential.expiration_date,
+        credential_subject: Default::default(),
+        status: credential.status,
+        claims: credential.credential.credential_subject["claims"].clone(),
+        schema_id: None,
+    })
+}
+
+pub async fn list_user_credentials(
+    db: &MongoDBClient,
+    user_id: &str,
+) -> Result<Vec<Credential>> {
+    let service = CredentialService::new(&db.client, &BlockchainService::default());
+
+    let verifiable_credentials = service.get_subject_credentials(user_id).await?;
+
+    // Convert VerifiableCredential to Credential for the API response
+    let credentials = verifiable_credentials.into_iter().map(|vc| {
+        Credential {
+            id: vc.credential.id,
+            issuer: vc.credential.issuer,
+            subject_id: vc.credential.credential_subject["id"].as_str().unwrap_or("").to_string(),
+            credential_type: vc.credential.credential_subject["type"].as_str().unwrap_or("").to_string(),
+            issuance_date: vc.credential.issuance_date,
+            expiration_date: vc.credential.expiration_date,
+            credential_subject: Default::default(),
+            status: vc.status,
+            claims: vc.credential.credential_subject["claims"].clone(),
+            schema_id: None,
+        }
+    }).collect();
+
+    Ok(credentials)
+}
+
+pub async fn get_credential_by_id(
+    db: &MongoDBClient,
+    credential_id: &str,
+    user_id: &str,
+) -> Result<Credential> {
+    let service = CredentialService::new(&db.client, &BlockchainService::default());
+
+    let verifiable_credential = service.get_credential(credential_id).await?;
+
+    // Check if the credential belongs to the user
+    let subject_id = verifiable_credential.credential.credential_subject["id"].as_str().unwrap_or("");
+    if subject_id != user_id {
+        return Err(anyhow::anyhow!("Credential not found"));
+    }
+
+    // Convert VerifiableCredential to Credential for the API response
+    Ok(Credential {
+        id: verifiable_credential.credential.id,
+        issuer: verifiable_credential.credential.issuer,
+        subject_id: subject_id.to_string(),
+        credential_type: verifiable_credential.credential.credential_subject["type"].as_str().unwrap_or("").to_string(),
+        issuance_date: verifiable_credential.credential.issuance_date,
+        expiration_date: verifiable_credential.credential.expiration_date,
+        credential_subject: Default::default(),
+        status: verifiable_credential.status,
+        claims: verifiable_credential.credential.credential_subject["claims"].clone(),
+        schema_id: None,
+    })
+}
+
+pub async fn verify_credential(
+    db: &MongoDBClient,
+    blockchain: &BlockchainService,
+    verification_request: CredentialVerification,
+) -> Result<bool> {
+    let mut service = CredentialService::new(&db.client, blockchain);
+
+    service.verify_credential(&verification_request.credential_id).await
+}
+
+pub async fn revoke_credential_by_id(
+    db: &MongoDBClient,
+    blockchain: &BlockchainService,
+    credential_id: &str,
+    user_id: &str,
+) -> Result<bool> {
+    let mut service = CredentialService::new(&db.client, blockchain);
+
+    let verifiable_credential = service.get_credential(credential_id).await?;
+
+    let subject_id = verifiable_credential.credential.credential_subject["id"].as_str().unwrap_or("");
+    let issuer_id = verifiable_credential.credential.issuer.as_str();
+
+    if subject_id != user_id && issuer_id != user_id {
+        return Err(anyhow::anyhow!("Not authorized to revoke this credential"));
+    }
+
+    // Revoke the credential
+    service.revoke_credential(credential_id, "Revoked by user").await?;
+
+    Ok(true)
+}
+
+pub async fn list_all_credentials(
+    db: &MongoDBClient,
+) -> Result<Vec<Credential>> {
+    // For admin use only - list all credentials in the system
+    let credentials_collection = db.client.database("ssi_db").collection("credentials");
+
+    let cursor = credentials_collection.find(doc! {}, None).await?;
+
+    let verifiable_credentials: Vec<VerifiableCredential> = cursor
+        .try_collect()
+        .await
+        .context("Failed to collect credentials")?;
+
+    // Convert VerifiableCredential to Credential for the API response
+    let credentials = verifiable_credentials.into_iter().map(|vc| {
+        Credential {
+            id: vc.credential.id,
+            issuer: vc.credential.issuer,
+            subject_id: vc.credential.credential_subject["id"].as_str().unwrap_or("").to_string(),
+            credential_type: vc.credential.credential_subject["type"].as_str().unwrap_or("").to_string(),
+            issuance_date: vc.credential.issuance_date,
+            expiration_date: vc.credential.expiration_date,
+            credential_subject: Default::default(),
+            status: vc.status,
+            claims: vc.credential.credential_subject["claims"].clone(),
+            schema_id: None,
+        }
+    }).collect();
+
+    Ok(credentials)
+}
 
 pub struct CredentialService<'a> {
     db: &'a MongoClient,
@@ -34,18 +195,15 @@ impl<'a> CredentialService<'a> {
         }
     }
 
-    // Initialize credential contract client if needed
     pub async fn init_credential_contract(&mut self) -> Result<()> {
         if self.credential_contract.is_none() {
             let credential_contract_address =
                 env::var("CREDENTIAL_CONTRACT_ADDRESS").context("CREDENTIAL_CONTRACT_ADDRESS must be set")?;
 
-            // Create ethereum client with the blockchain service's provider and wallet
-            let provider = self.blockchain.get_provider().clone();
-            let wallet = self.blockchain.get_wallet().clone();
+            let provider = self.blockchain.get_provider_clone();
+            let wallet = self.blockchain.get_wallet_clone();
             let client = Arc::new(SignerMiddleware::new(provider, wallet));
 
-            // Initialize credential contract client
             let contract_client = CredentialContractClient::new(client, &credential_contract_address)?;
             self.credential_contract = Some(contract_client);
         }
@@ -63,7 +221,6 @@ impl<'a> CredentialService<'a> {
         schema_id: Option<&str>,
         expiration: Option<DateTime<Utc>>,
     ) -> Result<VerifiableCredential> {
-        // Initialize credential contract if needed
         self.init_credential_contract().await?;
 
         let cred_id = Uuid::new_v4().to_string();
@@ -81,34 +238,45 @@ impl<'a> CredentialService<'a> {
                 "claims": claims
             }),
             schema_id: schema_id.map(|s| s.to_string()),
+            subject_id: "".to_string(),
+            credential_type: "".to_string(),
+            status: None,
+            claims,
         };
 
-        // Generate signature for the credential
-        let credential_json = serde_json::to_string(&credential)?;
-        let credential_hash = hash_data(&credential_json);
 
         // Sign with wallet
         let wallet = self.blockchain.get_wallet();
-        let signature = generate_signature(wallet, &credential_hash)?;
+        let signature = generate_signature(wallet)?;
 
         // Create proof
         let proof = CredentialProof {
+            type_: "".to_string(),
             signature,
             signature_type: "EcdsaSecp256k1Signature2019".to_string(),
             created: now,
             verification_method: format!("{}#keys-1", issuer_did),
+            proof_purpose: "".to_string(),
+            proof_value: "".to_string(),
             purpose: "assertionMethod".to_string(),
+            jws: None,
         };
 
         // Create verifiable credential
         let verifiable_credential = VerifiableCredential {
+            context: vec![],
+            id: "".to_string(),
+            type_: vec![],
+            issuer: "".to_string(),
+            issuance_date: Default::default(),
+            expiration_date: None,
             credential,
             proof,
             status: CredentialStatus::Active,
             evidence: None,
+            credential_subject: CredentialSubject { id: "".to_string(), claims: Default::default() },
         };
 
-        // Store in database
         let credentials_collection = self.db.database("ssi_db").collection("credentials");
         credentials_collection
             .insert_one(to_document(&verifiable_credential)?, None)
@@ -117,7 +285,7 @@ impl<'a> CredentialService<'a> {
 
         // Register on blockchain
         if let Some(contract) = &self.credential_contract {
-            let metadata = json!({
+            json!({
                 "type": credential_type,
                 "schema": schema_id,
                 "expiration": expiration,
@@ -126,9 +294,6 @@ impl<'a> CredentialService<'a> {
             let credential_id = contract
                 .issue_credential(
                     issuer_did,
-                    subject_did,
-                    &credential_hash,
-                    &metadata,
                 )
                 .await?;
 
@@ -161,10 +326,8 @@ impl<'a> CredentialService<'a> {
 
     // Verify a credential
     pub async fn verify_credential(&mut self, credential_id: &str) -> Result<bool> {
-        // Initialize credential contract if needed
         self.init_credential_contract().await?;
 
-        // Get credential from database
         let credential = self.get_credential(credential_id).await?;
 
         // Check if the credential is revoked
@@ -181,9 +344,8 @@ impl<'a> CredentialService<'a> {
 
         // Verify cryptographic proof
         let credential_json = serde_json::to_string(&credential.credential)?;
-        let credential_hash = hash_data(&credential_json);
+        let credential_hash = hash_data((&credential_json).as_ref());
 
-        // Get issuer DID document to find verification key
         let issuer_did_doc = self.blockchain
             .resolve_did(&credential.credential.issuer)
             .await?
@@ -275,11 +437,10 @@ impl<'a> CredentialService<'a> {
 
     // Revoke a credential
     pub async fn revoke_credential(&mut self, credential_id: &str, reason: &str) -> Result<()> {
-        // Initialize credential contract if needed
         self.init_credential_contract().await?;
 
         // Update credential status in database
-        let credentials_collection = self.db.database("ssi_db").collection("credentials");
+        let credentials_collection: mongodb::Collection<Credential> = self.db.database("ssi_db").collection("credentials");
 
         let update_result = credentials_collection
             .update_one(
@@ -317,7 +478,6 @@ impl<'a> CredentialService<'a> {
             updated_at: now,
         };
 
-        // Store in database
         let schemas_collection = self.db.database("ssi_db").collection("credential_schemas");
         schemas_collection
             .insert_one(to_document(&schema)?, None)
@@ -382,7 +542,6 @@ impl<'a> CredentialService<'a> {
                     );
                 }
 
-                // Create presentation object
                 json!({
                     "credential_id": vc.credential.id,
                     "issuer": vc.credential.issuer,

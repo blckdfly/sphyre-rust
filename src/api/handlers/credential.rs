@@ -1,15 +1,23 @@
+use winnow::Parser;
 use crate::api::{ApiError, ApiResponse, ApiResult, AppState};
 use crate::models::credential::{Credential, CredentialInput, CredentialVerification};
 use crate::models::user::User;
 use crate::services::credential::{
-    issue_new_credential, list_user_credentials, revoke_credential_by_id, verify_credential_proof,
-    get_credential_by_id, list_all_credentials,
+    issue_credential as issue_credential_fn,
+    list_user_credentials,
+    revoke_credential_by_id,
+    verify_credential as verify_credential_fn,
+    get_credential_by_id,
+    list_all_credentials,
 };
 use axum::{
     extract::{Path, State},
     Json,
 };
 use std::sync::Arc;
+use crate::blockchain::BlockchainService;
+use crate::db::mongodb::MongoDBClient;
+use anyhow::Result;
 
 // List credentials for the authenticated user
 pub async fn list_credentials(
@@ -46,10 +54,14 @@ pub async fn issue_credential(
     let blockchain = state.blockchain.as_ref()
         .ok_or_else(|| ApiError::InternalError("Blockchain service not available".to_string()))?;
 
-    let credential = issue_new_credential(&state.db, blockchain, &user.id, credential_input).await
+    let credential = issue_credential_service(&state.db, blockchain, &user.id, credential_input).await
         .map_err(|e| ApiError::InternalError(e.to_string()))?;
 
     Ok(Json(ApiResponse::success(credential, "Credential issued successfully")))
+}
+
+async fn issue_credential_service(_p0: &MongoDBClient, _p1: &BlockchainService, _p2: &String, _p3: CredentialInput) -> Result<Credential, Box<dyn std::error::Error>> {
+    todo!()
 }
 
 // Verify a credential
@@ -61,10 +73,14 @@ pub async fn verify_credential(
     let blockchain = state.blockchain.as_ref()
         .ok_or_else(|| ApiError::InternalError("Blockchain service not available".to_string()))?;
 
-    let is_valid = verify_credential_proof(&state.db, blockchain, verification_request).await
+    let is_valid = verify_credential_service(&state.db, blockchain, verification_request).await
         .map_err(|e| ApiError::InternalError(e.to_string()))?;
 
     Ok(Json(ApiResponse::success(is_valid, "Credential verification completed")))
+}
+
+async fn verify_credential_service(_p0: &MongoDBClient, _p1: &BlockchainService, _p2: CredentialVerification) -> Result<bool, Box<dyn std::error::Error>> {
+    todo!()
 }
 
 // Revoke a credential

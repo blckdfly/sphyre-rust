@@ -2,7 +2,7 @@ use crate::api::{ApiError, ApiResponse, ApiResult, AppState};
 use crate::models::user::{AuthToken, User, UserCredentials, UserProfile};
 use crate::services::identity::{authenticate_user, create_user_did, register_user, update_user_profile};
 use axum::{
-    extract::{Path, State},
+    extract::{State},
     Json,
 };
 use std::sync::Arc;
@@ -31,7 +31,7 @@ pub async fn login(
 
 // Get user profile
 pub async fn get_profile(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     user: User, // Injected by auth middleware
 ) -> ApiResult<UserProfile> {
     let profile = user.profile;

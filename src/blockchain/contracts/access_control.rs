@@ -1,10 +1,21 @@
 use anyhow::{Context, Result};
-use ethers::prelude::{abigen, Middleware, SignerMiddleware, Provider};
+use ethers::prelude::{abigen, SignerMiddleware, Provider};
 use ethers::types::{Address, H256, U256};
 use ethers::providers::Http;
 use ethers::signers::LocalWallet;
 use std::str::FromStr;
 use std::sync::Arc;
+
+// Add these imports for the missing types
+use axum::{extract::State, Json};
+use uuid::Uuid;
+use chrono::Utc;
+
+use crate::api::{ApiResult, ApiResponse, ApiError};
+use crate::models::access_log::{AccessPolicyInput, AccessPolicy};
+use crate::models::user::User;
+use crate::api::AppState;
+use crate::db::mongodb::MongoDBClient;
 
 // Generate type-safe contract bindings
 abigen!(
@@ -19,6 +30,10 @@ abigen!(
         event RoleRevoked(bytes32 indexed role, address indexed account, address indexed sender)
     ]"#,
 );
+
+// Re-export the generated contract type
+pub use self::AccessControlContract;
+
 
 pub struct AccessControlContractClient {
     contract: AccessControlContract<SignerMiddleware<Provider<Http>, LocalWallet>>,
@@ -80,27 +95,17 @@ impl AccessControlContractClient {
 
     // Grant a role to an account
     pub async fn grant_role(&self, role: [u8; 32], account: Address) -> Result<H256> {
-        let tx = self.contract
-            .grant_role(role, account)
-            .send()
-            .await?;
-
-        let receipt = tx.await?
-            .context("Transaction failed")?;
-
+        let grant_role_call = self.contract.grant_role(role, account);
+        let pending_tx = grant_role_call.send().await?;
+        let receipt = pending_tx.await?.context("Transaction failed")?;
         Ok(receipt.transaction_hash)
     }
 
     // Revoke a role from an account
     pub async fn revoke_role(&self, role: [u8; 32], account: Address) -> Result<H256> {
-        let tx = self.contract
-            .revoke_role(role, account)
-            .send()
-            .await?;
-
-        let receipt = tx.await?
-            .context("Transaction failed")?;
-
+        let revoke_role_call = self.contract.revoke_role(role, account);
+        let pending_tx = revoke_role_call.send().await?;
+        let receipt = pending_tx.await?.context("Transaction failed")?;
         Ok(receipt.transaction_hash)
     }
 
@@ -114,7 +119,6 @@ impl AccessControlContractClient {
         Ok(member)
     }
 
-    // Get number of members with a role
     pub async fn get_role_member_count(&self, role: [u8; 32]) -> Result<U256> {
         let count = self.contract
             .get_role_member_count(role)
@@ -136,4 +140,43 @@ impl AccessControlContractClient {
 
         Ok(members)
     }
+}
+
+// HTTP handler for creating access policy
+pub async fn create_access_policy_handler(
+    State(state): State<Arc<AppState>>,
+    user: User, // Injected by auth middleware
+    Json(policy_input): Json<AccessPolicyInput>,
+) -> ApiResult<AccessPolicy> {
+    let blockchain = state.blockchain.as_ref()
+        .ok_or_else(|| ApiError::InternalError("Blockchain service not available".to_string()))?;
+
+    let policy = create_access_policy_service(&state.db, blockchain, &user.id, policy_input).await
+        .map_err(|e| ApiError::InternalError(e.to_string()))?;
+
+    Ok(Json(ApiResponse::success(policy, "Access policy created successfully")))
+}
+
+// Service function for creating access policy
+pub async fn create_access_policy_service(
+    db: &MongoDBClient,
+    _blockchain: &impl std::fmt::Debug,
+    user_id: &str,
+    input: AccessPolicyInput,
+) -> Result<AccessPolicy> {
+    let new_policy = AccessPolicy {
+        id: Uuid::new_v4().to_string(),
+        user_id: user_id.to_string(),
+        resource_id: input.resource_id,
+        resource_type: input.resource_type,
+        action: input.action,
+        created_at: Utc::now(),
+    };
+
+    let collection = db.client.database("ssi_db").collection("access_policies");
+    collection
+        .insert_one(new_policy.clone(), None)
+        .await?;
+
+    Ok(new_policy)
 }

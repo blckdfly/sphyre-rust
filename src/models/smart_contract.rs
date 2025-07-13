@@ -6,16 +6,19 @@ pub struct SmartContract {
     pub id: String,
     pub name: String,
     pub version: String,
-    pub network: BlockchainNetwork,
     pub address: String,
     pub abi: String,
     pub bytecode: Option<String>,
+    pub network: String,
+    pub status: ContractStatus,     
+    pub creator: String,         
+    pub functions: Vec<String>,      
+    pub events: Vec<String>,       
+    pub deployer: String,
+    pub deployment_transaction: String,
+    pub deployment_block: u64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    pub status: ContractStatus,
-    pub creator: String,
-    pub functions: Vec<ContractFunction>,
-    pub events: Vec<ContractEvent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,11 +67,50 @@ pub struct FunctionParameter {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContractEvent {
+pub struct ContractEventDefinition {
     pub name: String,
     pub inputs: Vec<EventParameter>,
     pub anonymous: bool,
+
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ContractEvent {
+    DIDCreated {
+        did: String,
+        block_number: u64,
+    },
+    CredentialIssued {
+        credential_id: String,
+        issuer: String,
+        subject: String,
+        block_number: u64,
+    },
+    CredentialRevoked {
+        credential_id: String,
+        block_number: u64,
+    },
+    AccessPolicyCreated {
+        policy_id: String,
+        resource_id: String,
+        block_number: u64,
+    },
+    AccessPolicyRevoked {
+        policy_id: String,
+        block_number: u64,
+    },
+    ConsentGiven {
+        consent_id: String,
+        user: String,
+        controller: String,
+        block_number: u64,
+    },
+    ConsentRevoked {
+        consent_id: String,
+        block_number: u64,
+    },
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventParameter {

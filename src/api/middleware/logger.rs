@@ -9,7 +9,7 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 // Request logging middleware
-pub async fn log_request(request: Request<Body>, next: Next<Body>) -> Response {
+pub async fn log_request(request: Request<Body>, next: Next) -> Response {
     let start_time = Utc::now();
     let request_id = Uuid::new_v4().to_string();
     let method = request.method().clone();

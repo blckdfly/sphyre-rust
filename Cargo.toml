@@ -5,52 +5,48 @@ edition = "2021"
 
 [dependencies]
 # Web framework
-axum = { version = "0.6.2", features = ["headers", "multipart"] }
-tower = "0.4.13"
-tower-http = { version = "0.5.0", features = ["trace", "cors", "compression-gzip"] }
+axum = { version = "0.8.4", features = ["multipart"] }
+tower-http = { version = "0.6.6", features = ["trace", "cors", "compression-gzip"] }
 tokio = { version = "1.32.0", features = ["full"] }
 hyper = { version = "1.0.0", features = ["full"] }
 
 # MongoDB
-mongodb = "2.7.0"
-bson = { version = "2.7.0", features = ["chrono-0_4", "uuid-1"] }
+mongodb = "2.8.2"
+bson = { version = "2.14.0", features = ["chrono-0_4", "uuid-1"] }
 
 # Serialization/Deserialization
-serde = { version = "1.0.188", features = ["derive"] }
-serde_json = "1.0.107"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
 
 # Ethereum/Blockchain integration
-ethers = "2.0.10"
+ethers = { version = "2.0.14", features = ["abigen"] }
 web3 = "0.19.0"
 
 # Cryptography and ZKP
-base64 = "0.21.4"
-ring = "0.17.5"
-subtle = "2.5.0"
-curve25519-dalek = "4.1.1"
+ring = "0.17.14"
 merlin = "3.0.0"
-bulletproofs = "4.0.0"
-rand = "0.8.5"
-sha2 = "0.10.7"
+bulletproofs = "5.0.0"
+rand = "0.9.1"
+sha2 = "0.10.9"
 hex = "0.4.3"
+aes-gcm = "0.10.3"           # Untuk AES-GCM (enkripsi) # Untuk PBKDF2 dan SHA-256
+secp256k1 = "0.28.2"         # Untuk keypair dan signature
+sha3 = "0.10.8"
+async-trait = "0.1"# Untuk Keccak256 (Ethereum) # Untuk encoding hex # Untuk error handling
 
 # Error handling and utilities
-thiserror = "1.0.49"
-anyhow = "1.0.75"
+thiserror = "1.0.69"
+anyhow = "1.0.98"
 
 # Logging and tracing
-tracing = "0.1.37"
-tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
-log = "0.4.20"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 
 # Configuration
-config = "0.13.3"
 dotenv = "0.15.0"
-clap = { version = "4.4.6", features = ["derive"] }
 
 # Async
-futures = "0.3.28"
-async-trait = "0.1.73"
+futures = "0.3.31"
 
 # Time handling
 chrono = { version = "0.4.31", features = ["serde"] }
@@ -58,12 +54,14 @@ chrono = { version = "0.4.31", features = ["serde"] }
 # UUID
 uuid = { version = "1.4.1", features = ["v4", "serde"] }
 
-# Storage
-ipfs-api = { version = "0.17.0", features = ["with-hyper-rustls"] }
-
 # JWT
 jsonwebtoken = "8.3.0"
 
 # Password hashing
-argon2 = "0.5.2"
 lazy_static = "1.5.0"
+dirs = "5.0.1"
+reqwest = { version = "0.11.27", features = ["multipart"] }
+curve25519-dalek = "4.1.3"
+rand_core = "0.6.4"
+winnow = "0.7.11"
+clap = { version = "4.5.41", features = ["derive"] }

@@ -1,7 +1,5 @@
 mod ethereum;
-mod contracts;
+pub(crate) mod contracts;
 mod events;
 
-pub(crate) async fn init_blockchain_service(p0: &String) {
-    todo!()
-}
+pub use ethereum::{BlockchainService, init_blockchain_service};

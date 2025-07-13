@@ -2,8 +2,11 @@ use crate::api::{ApiError, ApiResponse, ApiResult, AppState};
 use crate::models::access_log::{AccessPolicy, AccessPolicyInput};
 use crate::models::user::User;
 use crate::services::access_control::{
-    create_access_policy, get_policy_by_id, list_user_policies,
-    revoke_policy_by_id, update_policy_by_id,
+    create_access_policy as create_policy_service,
+    get_policy_by_id, 
+    list_user_policies,
+    revoke_policy_by_id, 
+    update_policy_by_id,
 };
 use axum::{
     extract::{Path, State},
@@ -16,19 +19,18 @@ pub async fn list_access_policies(
     State(state): State<Arc<AppState>>,
     user: User, // Injected by auth middleware
 ) -> ApiResult<Vec<AccessPolicy>> {
-    let policies = list_user_policies(&state.db, &user.id).await
+    let policies = list_user_policies(&state.db.client, &user.id).await
         .map_err(|e| ApiError::InternalError(e.to_string()))?;
 
     Ok(Json(ApiResponse::success(policies, "Access policies retrieved successfully")))
 }
 
-// Get specific access policy by ID
 pub async fn get_access_policy(
     State(state): State<Arc<AppState>>,
     user: User, // Injected by auth middleware
     Path(policy_id): Path<String>,
 ) -> ApiResult<AccessPolicy> {
-    let policy = get_policy_by_id(&state.db, &policy_id, &user.id).await
+    let policy = get_policy_by_id(&state.db.client, &policy_id, &user.id).await
         .map_err(|e| match e.to_string().as_str() {
             "Access policy not found" => ApiError::NotFound(e.to_string()),
             _ => ApiError::InternalError(e.to_string()),
@@ -46,7 +48,7 @@ pub async fn create_access_policy(
     let blockchain = state.blockchain.as_ref()
         .ok_or_else(|| ApiError::InternalError("Blockchain service not available".to_string()))?;
 
-    let policy = create_access_policy(&state.db, blockchain, &user.id, policy_input).await
+    let policy = create_policy_service(&state.db.client, blockchain, &user.id, policy_input).await
         .map_err(|e| ApiError::InternalError(e.to_string()))?;
 
     Ok(Json(ApiResponse::success(policy, "Access policy created successfully")))
@@ -62,7 +64,7 @@ pub async fn update_access_policy(
     let blockchain = state.blockchain.as_ref()
         .ok_or_else(|| ApiError::InternalError("Blockchain service not available".to_string()))?;
 
-    let updated_policy = update_policy_by_id(&state.db, blockchain, &policy_id, &user.id, policy_input).await
+    let updated_policy = update_policy_by_id(&state.db.client, blockchain, &policy_id, &user.id, policy_input).await
         .map_err(|e| match e.to_string().as_str() {
             "Access policy not found" => ApiError::NotFound(e.to_string()),
             "Not authorized to update this policy" => ApiError::AccessDenied(e.to_string()),
@@ -81,7 +83,7 @@ pub async fn revoke_access_policy(
     let blockchain = state.blockchain.as_ref()
         .ok_or_else(|| ApiError::InternalError("Blockchain service not available".to_string()))?;
 
-    let revoked = revoke_policy_by_id(&state.db, blockchain, &policy_id, &user.id).await
+    let revoked = revoke_policy_by_id(&state.db.client, blockchain, &policy_id, &user.id).await
         .map_err(|e| match e.to_string().as_str() {
             "Access policy not found" => ApiError::NotFound(e.to_string()),
             "Not authorized to revoke this policy" => ApiError::AccessDenied(e.to_string()),

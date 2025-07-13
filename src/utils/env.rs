@@ -83,7 +83,6 @@ pub fn app_dir() -> PathBuf {
 
     let app_dir = home_dir.join(".ssi_wallet");
 
-    // Create directory if it doesn't exist
     if !app_dir.exists() {
         std::fs::create_dir_all(&app_dir)
             .expect("Failed to create application directory");
